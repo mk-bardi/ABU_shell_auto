@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, GroupAction
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description() -> LaunchDescription:
     package_name = 'shell_simulation' # Assuming your package name is shell_simulation
@@ -18,6 +19,21 @@ def generate_launch_description() -> LaunchDescription:
         'waypoints_yaml',
         default_value=default_waypoints_yaml,
         description='Path to the waypoints YAML file for the planner node.'
+    )
+    # planning_node opens its own CARLA client to read the map for route
+    # planning, so it needs the simulator's address. The competition job script
+    # exports it as CARLA_SERVER and the simulator is NOT on localhost there;
+    # in the APC docker environment it is the carla_server container. Default to
+    # the environment, and fall back to localhost for a native local install.
+    declare_carla_host_arg = DeclareLaunchArgument(
+        'carla_host',
+        default_value=os.environ.get('CARLA_SERVER', 'localhost'),
+        description='Hostname or IP of the CARLA server.'
+    )
+    declare_carla_port_arg = DeclareLaunchArgument(
+        'carla_port',
+        default_value=os.environ.get('CARLA_PORT', '2000'),
+        description='RPC port of the CARLA server.'
     )
     declare_sampling_resolution_arg = DeclareLaunchArgument(
         'sampling_resolution',
@@ -55,9 +71,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {'waypoints_yaml': LaunchConfiguration('waypoints_yaml')},
             {'sampling_resolution': LaunchConfiguration('sampling_resolution')},
-            # Add other planning_node specific parameters if any, e.g., carla_host, carla_port
-            {'carla_host': 'localhost'}, # Example, can be launch args too
-            {'carla_port': 2000},
+            {'carla_host': LaunchConfiguration('carla_host')},
+            {'carla_port': ParameterValue(LaunchConfiguration('carla_port'), value_type=int)},
             {'republish_target_period': 1.0}
         ]
     )
@@ -118,6 +133,8 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         # Declare arguments
         declare_waypoints_yaml_arg,
+        declare_carla_host_arg,
+        declare_carla_port_arg,
         declare_sampling_resolution_arg,
         declare_use_lidar_arg,
         declare_obstacle_dist_thresh_arg,
