@@ -2,12 +2,35 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>shell_simulation</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="sadiqsaidu1221@gmail.com">sadiq</maintainer>
-  <license>TODO: License declaration</license>
+  <version>0.1.0</version>
+  <description>Shell Eco-marathon APC 2025 Simulation Package for Team MKBardi.</description>
+  <maintainer email="sadiqsaidu1221@gmail.com">Sadiq Saidu</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend> <!-- ROS dependency for OpenCV conversion -->
+
+  <exec_depend>ros2launch</exec_depend>
+
+  <!-- Runtime Python dependencies. Keep this list to things present in the ROS base
+       image: the competition's run job resolves dependencies against the built
+       install/ tree only, so anything declared here may not actually get installed
+       before the nodes start. Route planning therefore uses no third-party graph
+       library -- see agents/navigation/route_graph.py. -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-opencv</exec_depend> <!-- System package for OpenCV -->
+
+  <!-- For transforms3d, if it's not covered by a rosdep key,
+       setup.py's install_requires will handle it via pip.
+       No standard rosdep key for 'transforms3d' typically.
+  -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
