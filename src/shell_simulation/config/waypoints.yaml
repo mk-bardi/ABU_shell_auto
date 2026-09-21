@@ -1,0 +1,35 @@
+# Official Shell Eco-marathon APC 2025 goal points for Town01.
+#
+# Source: the competition's published map and goal points. The previous version
+# of this file listed only 2 of these 14 goals; the other 12 entries were points
+# that score nothing.
+#
+# The spawn point is NOT listed here. planning_node treats every entry as a goal
+# to drive to, and asking the route planner for a path from the spawn point to
+# the spawn point can return an empty route, which leaves the node retrying the
+# same goal forever. It is recorded here for reference only:
+#
+#   start [x, y, z, roll, pitch, yaw]:
+#     [280.363739, -129.306351, 0.101746, 0.00, 0.00, 180.00]
+#
+# Order below is a 2-opt tour minimising Manhattan distance, which approximates
+# driving distance on Town01's street grid (~1795 m, down from ~1975 m for a
+# naive nearest-neighbour order). It is a static estimate: the genuinely optimal
+# order depends on real road distances and one-way constraints, which are only
+# knowable at run time from the route planner.
+
+ordered_waypoints:
+  - [339.100037, -258.568939, 0.001679]  # official goal 2
+  - [396.295319, -183.195740, 0.001678]  # official goal 3
+  - [334.949799, -161.106171, 0.001736]  # official goal 1
+  - [290.515564,  -56.175072, 0.001677]  # official goal 6
+  - [267.657074,   -1.983160, 0.001678]  # official goal 4
+  - [153.868896,  -26.115866, 0.001678]  # official goal 5
+  - [122.100121,  -55.142044, 0.001596]  # official goal 12
+  - [ 92.325722,  -86.063644, 0.001677]  # official goal 7
+  - [161.030975, -129.313187, 0.001679]  # official goal 13
+  - [184.758713, -199.424271, 0.001680]  # official goal 14
+  - [177.594101, -326.386902, 0.001677]  # official goal 9
+  - [ 88.384346, -287.468567, 0.001728]  # official goal 8
+  - [ -1.646942, -197.501282, 0.001555]  # official goal 10
+  - [ 59.701321,   -1.970804, 0.001467]  # official goal 11
