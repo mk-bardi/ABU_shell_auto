@@ -26,12 +26,16 @@ class PerceptionNode(Node):
         self.declare_parameter('roi_y_end_ratio', 0.80)   # Region of Interest Y end (percentage)
         self.declare_parameter('use_lidar', True)
         self.declare_parameter('lidar_max_fwd_angle_deg', 30.0) # Max forward angle for LiDAR points
-        # Height band for LiDAR returns, in the sensor's own frame. Without this
-        # the downward beams strike the road a few metres ahead and are reported
-        # as an obstacle, which brakes the car to a permanent standstill.
-        self.declare_parameter('lidar_mount_height', 2.4)     # metres above the road
-        self.declare_parameter('obstacle_min_height', 0.30)   # ignore returns this close to the road
-        self.declare_parameter('obstacle_max_height', 3.00)   # ignore overhead signs and bridges
+        # The LiDAR sees part of the ego vehicle at a fixed range: measured at
+        # 3.14-3.21 m, unchanged after driving 4.1 m, spread symmetrically about
+        # the sensor's own height. Reported as an obstacle it brakes the car to a
+        # standstill, so discard returns closer than this.
+        self.declare_parameter('lidar_min_range', 3.5)
+        # Optional height window in the sensor's frame, off by default. Set it
+        # only from measured data: the mounting height is not known here, and a
+        # wrongly placed window hides real vehicles instead of the road.
+        self.declare_parameter('lidar_min_z', -100.0)
+        self.declare_parameter('lidar_max_z', 100.0)
         self.declare_parameter('alert_latch_sec', 0.5) # How long an alert persists
 
         self.threshold: float = self.get_parameter('obstacle_distance_threshold').value
@@ -41,11 +45,12 @@ class PerceptionNode(Node):
         self.roi_y_end_ratio: float = self.get_parameter('roi_y_end_ratio').value
         self.use_lidar: bool = self.get_parameter('use_lidar').value
         self.lidar_fwd_rad: float = math.radians(self.get_parameter('lidar_max_fwd_angle_deg').value)
-        mount_height: float = self.get_parameter('lidar_mount_height').value
-        # Sensor frame: z grows upwards, so the road sits at -mount_height.
-        self.lidar_min_z: float = -mount_height + self.get_parameter('obstacle_min_height').value
-        self.lidar_max_z: float = -mount_height + self.get_parameter('obstacle_max_height').value
+        self.lidar_min_range: float = self.get_parameter('lidar_min_range').value
+        self.lidar_min_range_sq: float = self.lidar_min_range ** 2
+        self.lidar_min_z: float = self.get_parameter('lidar_min_z').value
+        self.lidar_max_z: float = self.get_parameter('lidar_max_z').value
         self._lidar_lowest_z_seen: float = float('inf')
+        self._lidar_nearest_kept: float = float('inf')
         self.alert_latch_sec: float = self.get_parameter('alert_latch_sec').value
 
         latched_qos = QoSProfile(
@@ -189,16 +194,15 @@ class PerceptionNode(Node):
             if px <= 0.1:  # Ignore points behind or too close to the sensor origin (forward axis)
                 continue
 
-            # Drop road returns and anything overhead. The beams angled downwards
-            # hit the tarmac well within braking distance, and counting those as
-            # obstacles means the vehicle never moves.
             if pz < self._lidar_lowest_z_seen:
                 self._lidar_lowest_z_seen = pz
             if pz < self.lidar_min_z or pz > self.lidar_max_z:
                 continue
 
             dist_sq_3d = px*px + py*py + pz*pz
-            if dist_sq_3d < 0.01: # Ignore points extremely close to origin
+            # Discard the ego vehicle's own returns. Everything inside this radius
+            # belongs to the car, so nothing real is lost.
+            if dist_sq_3d < self.lidar_min_range_sq:
                  continue
             
             # Check if point is within forward FOV (simplified cone check)
@@ -213,12 +217,14 @@ class PerceptionNode(Node):
                 if nearest < 0.5: # Optimization: if something is super close, no need to check further
                     break
         
+        if nearest < self._lidar_nearest_kept:
+            self._lidar_nearest_kept = nearest
         self.get_logger().info(
-            f"LiDAR height filter: keeping {self.lidar_min_z:.2f} m to "
-            f"{self.lidar_max_z:.2f} m in sensor frame; lowest return seen "
-            f"{self._lidar_lowest_z_seen:.2f} m. If the lowest return is far below "
-            f"the filter floor it is the road, as expected; if obstacles are being "
-            f"missed, lower lidar_mount_height.",
+            f"LiDAR: discarding returns under {self.lidar_min_range:.2f} m (ego "
+            f"vehicle); nearest kept so far {self._lidar_nearest_kept:.2f} m, "
+            f"lowest z seen {self._lidar_lowest_z_seen:.2f} m. If the nearest kept "
+            f"range sits at the filter edge and never changes, raise "
+            f"lidar_min_range.",
             throttle_duration_sec=10.0,
         )
 
