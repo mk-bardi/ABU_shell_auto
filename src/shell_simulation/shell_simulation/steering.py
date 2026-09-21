@@ -10,6 +10,20 @@ and only showed up as a car scrubbing its tyres against the kerb.
 import math
 
 
+def steering_command(alpha: float, lookahead: float, wheel_base: float,
+                     max_steer_angle: float) -> float:
+    """Value to publish on /steering_command for a heading error of `alpha`.
+
+    The two conventions are opposed and this is the only place that should
+    know it. `alpha` follows the maths convention used by the pure-pursuit
+    law, where positive is to the left; the vehicle interface defines -1.0 as
+    full left and +1.0 as full right. Publishing the law's output unnegated
+    steers away from the path, so every correction makes the error worse and
+    the car leaves the road.
+    """
+    return -pure_pursuit_steer(alpha, lookahead, wheel_base, max_steer_angle)
+
+
 def pure_pursuit_steer(alpha: float, lookahead: float, wheel_base: float,
                        max_steer_angle: float) -> float:
     """Normalised steering command in [-1, 1] for a heading error of `alpha`.

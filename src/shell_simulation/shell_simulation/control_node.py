@@ -12,7 +12,7 @@ from std_msgs.msg import Float32, Float64, Bool, String
 from nav_msgs.msg import Odometry, Path as NavPath # Renamed to avoid conflict with pathlib.Path
 from geometry_msgs.msg import Point
 
-from .steering import pure_pursuit_steer
+from .steering import steering_command
 
 # The vehicle interface accepts only these two gear values.
 # Stop scanning the path once we are this much further than the closest point.
@@ -275,8 +275,8 @@ class ControlNode(Node):
 
         alpha_pp = math.atan2(target_wp_y - self.current_pos[1],
                               target_wp_x - self.current_pos[0]) - self.current_yaw
-        steer_cmd = pure_pursuit_steer(alpha_pp, lookahead_dist, self.Lf,
-                                       self.max_steer_angle)
+        steer_cmd = steering_command(alpha_pp, lookahead_dist, self.Lf,
+                                     self.max_steer_angle)
 
         # Steering rate limit
         steer_diff = steer_cmd - self.prev_steer

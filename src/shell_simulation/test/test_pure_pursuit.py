@@ -86,3 +86,40 @@ def test_longer_lookahead_softens_steering():
 def test_lookahead_shorter_than_wheelbase_saturates():
     """Documents the geometry that caused the tyre scrubbing."""
     assert abs(steer(30, lookahead=2.0)) > 0.75
+
+
+# -- vehicle command convention ------------------------------------------
+
+from shell_simulation.steering import steering_command  # noqa: E402
+
+
+def command(deg, lookahead=LOOKAHEAD):
+    return steering_command(math.radians(deg), lookahead, WHEEL_BASE, MAX_STEER)
+
+
+def test_command_is_negated_relative_to_the_pure_pursuit_law():
+    """/steering_command is -1.0 full LEFT, +1.0 full RIGHT.
+
+    alpha follows the maths convention, positive to the left, so the two are
+    opposed. Publishing the law's output unnegated steers away from the path
+    and the error grows until the car leaves the road.
+    """
+    for deg in (-120, -60, -30, -5, 0, 5, 30, 60, 120):
+        assert command(deg) == pytest.approx(-steer(deg))
+
+
+def test_target_on_the_left_commands_left():
+    assert command(30) < 0     # negative is left
+
+
+def test_target_on_the_right_commands_right():
+    assert command(-30) > 0    # positive is right
+
+
+def test_straight_ahead_commands_neutral():
+    assert command(0.0) == pytest.approx(0.0)
+
+
+def test_command_stays_in_range():
+    for deg in range(-360, 361, 5):
+        assert -1.0 <= command(deg) <= 1.0
