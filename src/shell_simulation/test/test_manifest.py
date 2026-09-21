@@ -101,3 +101,26 @@ def test_spawn_point_is_not_listed_as_a_goal():
     data = yaml.safe_load(WAYPOINTS.read_text())['ordered_waypoints']
     for p in data:
         assert not (abs(p[0] - 280.363739) < 0.5 and abs(p[1] + 129.306351) < 0.5)
+
+
+# -- control interface contract ------------------------------------------
+
+CONTROL_NODE = PKG_ROOT / 'shell_simulation' / 'control_node.py'
+
+
+def test_gear_value_is_accepted_by_the_vehicle_interface():
+    """Only "forward" and "reverse" are valid; "drive" silently does nothing."""
+    src = CONTROL_NODE.read_text()
+    assert 'GEAR_FORWARD = "forward"' in src
+    assert 'String(data="drive")' not in src
+
+
+def test_gear_and_handbrake_are_actually_published():
+    """They were commented out, so the car stayed in neutral at full throttle."""
+    src = CONTROL_NODE.read_text()
+    assert 'self.pub_gear.publish(' in src
+    assert 'self.pub_handbrake.publish(' in src
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('#') and 'pub_gear.publish' in stripped:
+            raise AssertionError(f"gear publish is commented out: {stripped}")

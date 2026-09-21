@@ -12,6 +12,11 @@ from std_msgs.msg import Float32, Float64, Bool, String
 from nav_msgs.msg import Odometry, Path as NavPath # Renamed to avoid conflict with pathlib.Path
 from geometry_msgs.msg import Point
 
+# The vehicle interface accepts only these two gear values.
+GEAR_FORWARD = "forward"
+GEAR_REVERSE = "reverse"
+
+
 def _dist2(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     dx, dy = a[0] - b[0], a[1] - b[1]
     return dx * dx + dy * dy
@@ -88,8 +93,16 @@ class ControlNode(Node):
         self.pub_throttle = self.create_publisher(Float64, '/throttle_command', 10)
         self.pub_brake = self.create_publisher(Float64, '/brake_command', 10)
         self.pub_steer = self.create_publisher(Float64, '/steering_command', 10)
-        self.pub_gear = self.create_publisher(String, '/gear_command', 10) # If used
-        self.pub_handbrake = self.create_publisher(Bool, '/handbrake_command', 10) # If used
+        # Latched: these are state, not a stream. A bridge that subscribes after
+        # we start still needs the gear, or the car sits in neutral.
+        drivetrain_qos = QoSProfile(
+            depth=1,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self.pub_gear = self.create_publisher(String, '/gear_command', drivetrain_qos)
+        self.pub_handbrake = self.create_publisher(Bool, '/handbrake_command', drivetrain_qos)
 
 
         sensor_qos = QoSProfile(
@@ -134,12 +147,23 @@ class ControlNode(Node):
         self.prev_brake: float = 0.0
         self.prev_steer: float = 0.0
 
-        # Ensure gear is set to drive initially if applicable
-        # self.pub_gear.publish(String(data="drive")) 
-        # self.pub_handbrake.publish(Bool(data=False))
+        # The vehicle starts in neutral: throttle does nothing until a gear is
+        # selected, which is why full throttle left the car stationary. The
+        # interface accepts only "forward" or "reverse" -- "drive" is not valid.
+        self._publish_drivetrain_state()
 
         self.control_timer = self.create_timer(self.tau, self.control_timer_callback)
         self.get_logger().info("Control node ready (Pure-Pursuit + PID).")
+
+    def _publish_drivetrain_state(self) -> None:
+        """Keep the car in forward gear with the handbrake off.
+
+        Published every control cycle rather than once at start-up: publishing
+        once races the bridge's subscriber, and a bridge restart would
+        otherwise leave the vehicle in neutral with no way to recover.
+        """
+        self.pub_gear.publish(String(data=GEAR_FORWARD))
+        self.pub_handbrake.publish(Bool(data=False))
 
     def cb_path(self, msg: NavPath) -> None:
         if not msg.poses:
@@ -203,6 +227,7 @@ class ControlNode(Node):
     def control_timer_callback(self) -> None:
         if self.current_pos is None or not self.path_xy:
             # self.get_logger().info("No odom or path yet, skipping control loop.")
+            self._publish_drivetrain_state()
             self.pub_throttle.publish(Float64(data=0.0))
             self.pub_brake.publish(Float64(data=0.0)) # Publish zero brake if no path
             self.pub_steer.publish(Float64(data=0.0))
@@ -315,6 +340,7 @@ class ControlNode(Node):
         final_throttle = max(0.0, min(1.0, final_throttle))
         final_brake = max(0.0, min(1.0, final_brake))
 
+        self._publish_drivetrain_state()
         self.pub_steer.publish(Float64(data=steer_cmd))
         self.pub_throttle.publish(Float64(data=final_throttle))
         self.pub_brake.publish(Float64(data=final_brake))
