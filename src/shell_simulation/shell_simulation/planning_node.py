@@ -42,6 +42,12 @@ class PlannerNode(Node):
         self.declare_parameter('carla_host', os.environ.get('CARLA_SERVER', 'localhost'))
         self.declare_parameter('carla_port', 2000)
         self.declare_parameter('republish_target_period', 1.0) # seconds
+        # A route is only believable if it starts near the car. A plan made from
+        # a bad odometry reading -- the first message, say, while the vehicle is
+        # still settling from its spawn drop -- lands somewhere else entirely.
+        self.declare_parameter('max_path_start_distance', 25.0)  # metres
+        # Replan if the car ends up this far from every point of its own route.
+        self.declare_parameter('replan_distance', 20.0)          # metres
 
         self.waypoint_threshold_sq: float = self.get_parameter('waypoint_threshold').value ** 2
         sampling_res: float = self.get_parameter('sampling_resolution').value
@@ -51,6 +57,8 @@ class PlannerNode(Node):
         self.way_yaml_file: Path = self._resolve_waypoints_path(way_yaml_path_str)
             
         republish_period: float = self.get_parameter('republish_target_period').value
+        self.max_path_start_distance: float = self.get_parameter('max_path_start_distance').value
+        self.replan_distance: float = self.get_parameter('replan_distance').value
 
         self.tsp_goals: List[Point] = self._load_yaml_waypoints(self.way_yaml_file)
         if not self.tsp_goals:
@@ -209,6 +217,31 @@ class PlannerNode(Node):
         # No immediate need to plan path here, let the timer handle it
         # to decouple odom updates from planning frequency.
 
+    def _reject_reason(self, waypoints: List[carla.Waypoint], position) -> Optional[str]:
+        """Say why a freshly planned route is not usable, or None if it is.
+
+        A route that is too short, or that starts a long way from the car, is
+        the symptom of planning from a bad pose rather than a real answer.
+        """
+        if len(waypoints) < 2:
+            return f"only {len(waypoints)} waypoint(s)"
+        first = waypoints[0].transform.location
+        fx, fy, _ = carla_to_ros_xyz(first.x, first.y, first.z)
+        gap = math.hypot(fx - position.x, fy - position.y)
+        if gap > self.max_path_start_distance:
+            return (f"starts {gap:.1f} m away "
+                    f"(limit {self.max_path_start_distance:.0f} m)")
+        return None
+
+    def _distance_to_path(self, position) -> float:
+        """Shortest distance from the vehicle to its current route, in metres."""
+        best = float('inf')
+        for wp in self.current_nav_path_wps:
+            loc = wp.transform.location
+            wx, wy, _ = carla_to_ros_xyz(loc.x, loc.y, loc.z)
+            best = min(best, math.hypot(wx - position.x, wy - position.y))
+        return best
+
     def plan_path_segment_timed_event(self) -> None:
         if self.vehicle_odom is None or self.all_goals_done:
             # self.get_logger().info("Skipping path planning: no odom or mission complete.")
@@ -238,13 +271,20 @@ class PlannerNode(Node):
             try:
                 # GRP trace_route returns a list of (carla.Waypoint, RoadOption) tuples
                 path_segment_tuples = self.grp.trace_route(current_cl_wp, target_cl_wp)
-                if path_segment_tuples:
-                    self.current_nav_path_wps = [wp_tuple[0] for wp_tuple in path_segment_tuples]
+                candidate = [wp_tuple[0] for wp_tuple in path_segment_tuples]
+                problem = self._reject_reason(candidate, current_position)
+                if problem is None:
+                    self.current_nav_path_wps = candidate
                     self.get_logger().info(f"Successfully planned path segment with {len(self.current_nav_path_wps)} waypoints to TSP Goal {self.current_tsp_goal_idx}.")
                     self._publish_nav_path_from_wps(self.current_nav_path_wps)
                     self.needs_new_path_segment = False # Path found, wait until near end
                 else:
-                    self.get_logger().warn(f"GRP trace_route returned empty path for TSP Goal {self.current_tsp_goal_idx}. Retrying on next cycle.")
+                    # Leave needs_new_path_segment set so the next cycle tries again,
+                    # once odometry has settled. Accepting a bad route here strands
+                    # the vehicle for good, because nothing ever asks for another.
+                    self.get_logger().warn(
+                        f"Rejected route to TSP Goal {self.current_tsp_goal_idx}: {problem}. Retrying.",
+                        throttle_duration_sec=2.0)
                     self.current_nav_path_wps = []
                     self._publish_nav_path_from_wps([]) # Publish empty path
 
@@ -258,6 +298,14 @@ class PlannerNode(Node):
                 self._publish_nav_path_from_wps([])
         
         # Check if current TSP goal is reached or if end of current path segment is near
+        if self.current_nav_path_wps and not self.needs_new_path_segment:
+            strayed = self._distance_to_path(current_position)
+            if strayed > self.replan_distance:
+                self.get_logger().warn(
+                    f"{strayed:.1f} m from the planned route; replanning.",
+                    throttle_duration_sec=2.0)
+                self.needs_new_path_segment = True
+
         if self.current_nav_path_wps:
             # Check distance to the *actual current TSP goal*, not just end of path segment
             dist_to_tsp_goal_sq = (current_position.x - self.tsp_goals[self.current_tsp_goal_idx].x)**2 + \
