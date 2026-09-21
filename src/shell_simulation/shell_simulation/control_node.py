@@ -247,6 +247,18 @@ class ControlNode(Node):
             return
 
         target_speed = self.speed_cruise
+
+        # An obstacle limits how fast we may go; it does not command a brake.
+        # Commanding a brake cannot tell "closing at 10 m/s" from "parked 4 m
+        # short", so it held the car at a standstill forever: stopped, still
+        # braking, and being stopped never changed the distance. A ceiling lets
+        # the car creep, which either clears the obstacle or genuinely closes on
+        # it, and the PID below decides throttle against brake as usual.
+        if self.obs_dist < self.obs_start_brake_dist:
+            span = max(1e-3, self.obs_start_brake_dist - self.obs_full_brake_dist)
+            fraction = (self.obs_dist - self.obs_full_brake_dist) / span
+            obstacle_speed_limit = self.speed_cruise * max(0.0, min(1.0, fraction))
+            target_speed = min(target_speed, obstacle_speed_limit)
         
         # --- Pure Pursuit Steering Control ---
         lookahead_dist = self.L_time * self.speed_mps + self.L_min # Dynamic lookahead
@@ -317,31 +329,17 @@ class ControlNode(Node):
 
 
         # --- Obstacle Avoidance ---
-        obs_brake_factor = 0.0
-        if self.obs_dist < self.obs_start_brake_dist:
-            if self.obs_dist <= self.obs_full_brake_dist:
-                obs_brake_factor = 1.0
-            else:
-                obs_brake_factor = (self.obs_start_brake_dist - self.obs_dist) / \
-                                   (self.obs_start_brake_dist - self.obs_full_brake_dist)
-            
-            final_brake = max(final_brake, obs_brake_factor)
-
-            # Hold the car only for an obstacle genuinely inside the full-brake
-            # distance. The previous rule fired at 1.5x that distance whenever
-            # speed was low, which is self-sustaining: the car braked because it
-            # was stopped and stayed stopped because it was braking, so a single
-            # spurious reading parked it for good. Anything between the full-brake
-            # and start-brake distances is left to the proportional factor above,
-            # which still slows the car without pinning it at zero.
-            if self.obs_dist <= self.obs_full_brake_dist and self.speed_mps < self.obs_critical_speed:
-                 self.get_logger().warning(
-                    f"Obstacle within {self.obs_full_brake_dist:.1f}m ({self.obs_dist:.1f}m) at "
-                    f"{self.speed_mps:.1f}m/s. Holding.",
-                    throttle_duration_sec=2.0,
-                )
-                 final_throttle = 0.0
-                 final_brake = max(final_brake, 0.8) # Stronger brake
+        # The speed ceiling above does the routine slowing. Only an emergency
+        # stop remains, and it is conditioned on actually moving, so a stopped
+        # car is never held by its own stillness.
+        if self.obs_dist <= self.obs_full_brake_dist and self.speed_mps > self.obs_critical_speed:
+            self.get_logger().warning(
+                f"Obstacle at {self.obs_dist:.1f} m while doing "
+                f"{self.speed_mps:.1f} m/s. Emergency brake.",
+                throttle_duration_sec=2.0,
+            )
+            final_throttle = 0.0
+            final_brake = 1.0
 
         # Ensure throttle and brake are not applied simultaneously
         if final_brake > 0.05:
