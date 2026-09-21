@@ -10,6 +10,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from geometry_msgs.msg import Point, PoseStamped, PointStamped, Quaternion
+
+from .frames import carla_to_ros_rpy, carla_to_ros_xyz, ros_to_carla_xyz
 from nav_msgs.msg import Odometry, Path as NavPath # Renamed to avoid conflict
 from std_msgs.msg import Bool, Header # Added Header for explicit use if needed
 import yaml
@@ -215,7 +217,9 @@ class PlannerNode(Node):
             return
 
         current_position = self.vehicle_odom.pose.pose.position
-        current_cl_wp = carla.Location(current_position.x, current_position.y, current_position.z)
+        # Odometry arrives in the ROS frame; CARLA's y runs the other way.
+        current_cl_wp = carla.Location(*ros_to_carla_xyz(
+            current_position.x, current_position.y, current_position.z))
 
         if self.needs_new_path_segment:
             if self.current_tsp_goal_idx >= len(self.tsp_goals):
@@ -226,7 +230,9 @@ class PlannerNode(Node):
                 return
 
             target_tsp_goal = self.tsp_goals[self.current_tsp_goal_idx]
-            target_cl_wp = carla.Location(target_tsp_goal.x, target_tsp_goal.y, target_tsp_goal.z)
+            # The goal list is in the competition's ROS-frame coordinates.
+            target_cl_wp = carla.Location(*ros_to_carla_xyz(
+                target_tsp_goal.x, target_tsp_goal.y, target_tsp_goal.z))
             self.get_logger().info(f"Planning new path segment from current odom to TSP goal {self.current_tsp_goal_idx} at ({target_cl_wp.x:.1f}, {target_cl_wp.y:.1f})")
 
             try:
@@ -283,9 +289,14 @@ class PlannerNode(Node):
             pose = PoseStamped()
             pose.header.stamp = path_msg.header.stamp 
             pose.header.frame_id = path_msg.header.frame_id
-            pose.pose.position.x = wp.transform.location.x
-            pose.pose.position.y = wp.transform.location.y
-            pose.pose.position.z = wp.transform.location.z #CARLA waypoints have z
+            # Route waypoints come back in CARLA's frame; the path is consumed
+            # by control_node alongside ROS odometry, so convert here.
+            px, py, pz = carla_to_ros_xyz(wp.transform.location.x,
+                                          wp.transform.location.y,
+                                          wp.transform.location.z)
+            pose.pose.position.x = px
+            pose.pose.position.y = py
+            pose.pose.position.z = pz
             # Orientation can be derived from waypoint transform if needed, or path direction
             # For now, keeping orientation as default (0,0,0,1)
             q = carla_rotation_to_ros_quaternion(wp.transform.rotation)
@@ -304,9 +315,11 @@ def carla_rotation_to_ros_quaternion(carla_rotation: carla.Rotation) -> Quaterni
     # ROS quaternion: x, y, z, w
     # tf.transformations.quaternion_from_euler can be used if available and preferred.
     # Manual conversion:
-    roll = math.radians(carla_rotation.roll)
-    pitch = math.radians(carla_rotation.pitch)
-    yaw = math.radians(carla_rotation.yaw)
+    roll_deg, pitch_deg, yaw_deg = carla_to_ros_rpy(
+        carla_rotation.roll, carla_rotation.pitch, carla_rotation.yaw)
+    roll = math.radians(roll_deg)
+    pitch = math.radians(pitch_deg)
+    yaw = math.radians(yaw_deg)
 
     cy = math.cos(yaw * 0.5)
     sy = math.sin(yaw * 0.5)
