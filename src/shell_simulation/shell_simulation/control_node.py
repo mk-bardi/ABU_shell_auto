@@ -12,7 +12,12 @@ from std_msgs.msg import Float32, Float64, Bool, String
 from nav_msgs.msg import Odometry, Path as NavPath # Renamed to avoid conflict with pathlib.Path
 from geometry_msgs.msg import Point
 
+from .steering import pure_pursuit_steer
+
 # The vehicle interface accepts only these two gear values.
+# Stop scanning the path once we are this much further than the closest point.
+_PATH_SEARCH_GIVE_UP_M2 = 400.0  # metres squared
+
 GEAR_FORWARD = "forward"
 GEAR_REVERSE = "reverse"
 
@@ -44,8 +49,13 @@ class ControlNode(Node):
         super().__init__('control_node')
 
         self.declare_parameter('wheel_base', 2.8)
+        # Road-wheel angle at full lock. The pure-pursuit law yields an angle in
+        # radians, which has to be divided by this to become a steering command.
+        self.declare_parameter('max_steer_angle_rad', 1.22)  # ~70 degrees
         self.declare_parameter('pp_lookahead_time', 0.5)
-        self.declare_parameter('pp_L_min', 2.0)
+        # Must exceed the wheelbase, or the pure-pursuit geometry demands turns
+        # the vehicle cannot physically execute and the steering pins at full lock.
+        self.declare_parameter('pp_L_min', 5.0)
         self.declare_parameter('pp_L_max', 15.0)
         # speed_pid parameters are now fetched with a prefix
         self.declare_parameter('speed_pid.k_p', 0.8)
@@ -66,6 +76,7 @@ class ControlNode(Node):
 
         p = self.get_parameter
         self.Lf = p('wheel_base').value
+        self.max_steer_angle = p('max_steer_angle_rad').value
         self.tau = p('control_period').value
         self.L_time = p('pp_lookahead_time').value
         self.L_min = p('pp_L_min').value
@@ -127,6 +138,7 @@ class ControlNode(Node):
         self.create_subscription(Float32, '/nearest_obstacle_distance', self.cb_obs, qos_profile=latched_qos)
         self.create_subscription(Bool, '/mission_complete', self.cb_mission, qos_profile=latched_qos)
 
+        self._path_idx: int = 0
         self.path_xy: List[Tuple[float, float]] = []
         self.path_s: List[float] = []
         self.path_yaw: List[float] = [] # If path provides yaw
@@ -166,6 +178,7 @@ class ControlNode(Node):
         self.pub_handbrake.publish(Bool(data=False))
 
     def cb_path(self, msg: NavPath) -> None:
+        self._path_idx = 0  # new path, start tracking from its beginning
         if not msg.poses:
             self.path_xy = []
             self.path_s = []
@@ -239,28 +252,31 @@ class ControlNode(Node):
         lookahead_dist = self.L_time * self.speed_mps + self.L_min # Dynamic lookahead
         lookahead_dist = max(self.L_min, min(self.L_max, lookahead_dist))
 
-        target_idx = len(self.path_xy) - 1 # Default to last point
-        for i in range(len(self.path_xy) -1, -1, -1): # Search backwards
-            dist_to_path_point = math.sqrt(_dist2(self.current_pos, self.path_xy[i]))
-            if dist_to_path_point < lookahead_dist:
-                # Check if this point or the next one is better if segment is crossed
-                if i < len(self.path_xy) - 1:
-                    # Simple check: if lookahead_dist is between this point and next
-                    # More robust intersection logic might be needed
-                    target_idx = i + 1 # Aim for the point just beyond lookahead distance
-                else:
-                    target_idx = i
-                break
-            target_idx = i # Keep track of closest point if no intersection found within lookahead
+        # Advance along the path from where we were last time rather than scanning
+        # it from the end. A route that doubles back through Town01 passes close to
+        # the car more than once, and searching backwards would lock onto a point
+        # from much later in the route, steering at something already behind us.
+        closest_idx = self._path_idx
+        closest_d2 = _dist2(self.current_pos, self.path_xy[closest_idx])
+        for i in range(self._path_idx, len(self.path_xy)):
+            d2 = _dist2(self.current_pos, self.path_xy[i])
+            if d2 < closest_d2:
+                closest_d2, closest_idx = d2, i
+            elif d2 > closest_d2 + _PATH_SEARCH_GIVE_UP_M2:
+                break  # receding from the closest point; the rest is further still
+        self._path_idx = closest_idx
 
-        if target_idx >= len(self.path_xy): # Should not happen with corrected logic
-            target_idx = len(self.path_xy) - 1
+        target_idx = closest_idx
+        while (target_idx < len(self.path_xy) - 1
+               and math.sqrt(_dist2(self.current_pos, self.path_xy[target_idx])) < lookahead_dist):
+            target_idx += 1
 
         target_wp_x, target_wp_y = self.path_xy[target_idx]
 
-        alpha_pp = math.atan2(target_wp_y - self.current_pos[1], target_wp_x - self.current_pos[0]) - self.current_yaw
-        steer_cmd_raw = math.atan2(2.0 * self.Lf * math.sin(alpha_pp), lookahead_dist)
-        steer_cmd = max(-1.0, min(1.0, steer_cmd_raw)) # Clamp to [-1, 1] range for normalized steering
+        alpha_pp = math.atan2(target_wp_y - self.current_pos[1],
+                              target_wp_x - self.current_pos[0]) - self.current_yaw
+        steer_cmd = pure_pursuit_steer(alpha_pp, lookahead_dist, self.Lf,
+                                       self.max_steer_angle)
 
         # Steering rate limit
         steer_diff = steer_cmd - self.prev_steer
