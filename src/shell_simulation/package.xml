@@ -22,7 +22,7 @@
        image: the competition's run job resolves dependencies against the built
        install/ tree only, so anything declared here may not actually get installed
        before the nodes start. Route planning therefore uses no third-party graph
-       library -- see agents/navigation/route_graph.py. -->
+       library; see agents/navigation/route_graph.py. -->
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-opencv</exec_depend> <!-- System package for OpenCV -->
