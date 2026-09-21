@@ -310,10 +310,19 @@ class ControlNode(Node):
                                    (self.obs_start_brake_dist - self.obs_full_brake_dist)
             
             final_brake = max(final_brake, obs_brake_factor)
-            # If obstacle is close and speed is low, ensure full stop
-            if self.obs_dist < self.obs_full_brake_dist * 1.5 and self.speed_mps < self.obs_critical_speed:
+
+            # Hold the car only for an obstacle genuinely inside the full-brake
+            # distance. The previous rule fired at 1.5x that distance whenever
+            # speed was low, which is self-sustaining: the car braked because it
+            # was stopped and stayed stopped because it was braking, so a single
+            # spurious reading parked it for good. Anything between the full-brake
+            # and start-brake distances is left to the proportional factor above,
+            # which still slows the car without pinning it at zero.
+            if self.obs_dist <= self.obs_full_brake_dist and self.speed_mps < self.obs_critical_speed:
                  self.get_logger().warning(
-                    f"Obstacle very close ({self.obs_dist:.1f}m) at low speed ({self.speed_mps:.1f}m/s). Forcing brake."
+                    f"Obstacle within {self.obs_full_brake_dist:.1f}m ({self.obs_dist:.1f}m) at "
+                    f"{self.speed_mps:.1f}m/s. Holding.",
+                    throttle_duration_sec=2.0,
                 )
                  final_throttle = 0.0
                  final_brake = max(final_brake, 0.8) # Stronger brake
